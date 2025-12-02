@@ -23,7 +23,7 @@ def _predicate_model():
     layers.append(torch.nn.Sigmoid())
     return torch.nn.Sequential(*layers)
 
-def set_global_seed(seed=42):
+def set_global_seed(seed):
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -75,7 +75,7 @@ def build_rules(preds, g):
     xC = ltn.Variable("x", g["Cows"])
     xA = ltn.Variable("x", g["Animals"])
     xP = ltn.Variable("x", g["Penguins"])
-    xNon_B = ltn.Variable("x", torch.cat([g["Normal_Birds"], g["Cows"]], dim=0))
+    xNon_P = ltn.Variable("x", torch.cat([g["Normal_Birds"], g["Cows"]], dim=0))
 
     return [
         # 1 normal birds are birds
@@ -89,7 +89,7 @@ def build_rules(preds, g):
         # 5 penguins are penguins
         lambda: Forall(xP, is_penguin(xP)),
         # 6 non-penguins are not penguins
-        lambda: Forall(xNon_B, Not(is_penguin(xNon_B))),
+        lambda: Forall(xNon_P, Not(is_penguin(xNon_P))),
         # 7 penguins are birds
         lambda: Forall(xA, Impl(is_penguin(xA), is_bird(xA))),
         # 8 penguins do not fly
@@ -156,7 +156,7 @@ def evaluate(preds, g):
     #     "not(can_fly(Penguins))": float(q4)
     # }
 
-def plot_groundings(g1s, g2s, g3s, g4s, title):
+def plot_groundings(g1s, g2s, g3s, g4s, title, stage_periods=None):
     plt.plot(g1s, label='is_bird(Normal_Birds)')
     plt.plot(g2s, label='is_bird(Penguins)')
     plt.plot(g3s, label='can_fly(Birds)')
@@ -165,6 +165,17 @@ def plot_groundings(g1s, g2s, g3s, g4s, title):
     plt.ylabel('Satisfaction Level')
     plt.title(title)
     plt.legend()
+    if stage_periods:
+        # compute cumulative boundaries and mark them
+        cum = []
+        s = 0
+        for p in stage_periods:
+            s += p
+            cum.append(s)
+        ymax = plt.ylim()[1]
+        for idx, b in enumerate(cum[:-1]):
+            plt.axvline(x=b, color='k', linestyle='--', alpha=0.6)
+            plt.text(b, ymax * 0.95, f'Stage {idx+1}', rotation=90, va='top', ha='right')
     plt.savefig(f"{title}.png")
     plt.show()
 
@@ -189,21 +200,54 @@ def run_baseline():
 # Random 3-stage curriculum (with recall)
 # ============================================================
 
-def run_random_curriculum():
-    print("\n=== RANDOM CURRICULUM ===")
+def run_random(original=False):
     g = make_groundings()
     preds = build_predicates()
     all_rules = build_rules(preds, g)
+    title  = "Random_Original" if original else "Random"
 
-    random.shuffle(all_rules)
-    stages = [all_rules[:3], all_rules[3:5], all_rules[5:]]
+    if original:  # following the specific split from the paper: stage 1:(3,4,6,2) 2:(5,1) 3:(7,8)
+        print("\n=== RANDOM (ORIGINAL) CURRICULUM ===")
+        stages = [[all_rules[i] for i in idxs] for idxs in [[1, 2, 3, 5], [0, 4], [6, 7]]]
+    else:
+        print("\n=== RANDOM CURRICULUM ===")
+        sizes = [4, 2, 2]
+        indices = list(range(len(all_rules)))
+        random.shuffle(indices)
+        it = iter(indices)
+        stages = [[all_rules[i] for i in (next(it) for _ in range(s))] for s in sizes]
 
     recall = []
+    stage_all_results = []
+    stage_final_results = []
 
     for stage in stages:
-        stage_rules = stage + random.sample(recall, k=min(2, len(recall)))
-        train_stage(preds, stage_rules) # TODO: return value lists
-        recall += stage
+        stage_rules = stage + recall
+        g1s, g2s, g3s, g4s = train_stage(preds, stage_rules, g)
+
+        # recall, one rule per stage added to memory
+        recalled_rule = random.choice(stage)
+        recall.append(recalled_rule)
+
+        stage_all_results.append((g1s, g2s, g3s, g4s))
+        stage_final_results.append((float(g1s[-1]), float(g2s[-1]), float(g3s[-1]), float(g4s[-1])))
+
+    # print final results per stage
+    print("Per-stage final results:")
+    for idx, (r1, r2, r3, r4) in enumerate(stage_final_results):
+        print(f" Stage {idx+1}: is_bird(Normal_Birds) {r1:.4f}, is_bird(Penguins) {r2:.4f}, can_fly(Birds) {r3:.4f}, not(can_fly(Penguins)) {r4:.4f}")
+
+    # merge all data points for a complete plot and demarcate stage periods
+    full_g1s, full_g2s, full_g3s, full_g4s = [], [], [], []
+    stage_periods = []
+    for (g1s, g2s, g3s, g4s) in stage_all_results:
+        full_g1s.extend(g1s)
+        full_g2s.extend(g2s)
+        full_g3s.extend(g3s)
+        full_g4s.extend(g4s)
+        stage_periods.append(len(g1s))
+
+    plot_groundings(full_g1s, full_g2s, full_g3s, full_g4s, title=title, stage_periods=stage_periods)
 
     return evaluate(preds, g)
 
@@ -213,7 +257,8 @@ def run_random_curriculum():
 
 # TODO: average over multiple seeds
 set_global_seed(42)
-run_baseline()
-# run_random_curriculum()
+# run_baseline()
+run_random()
+# run_random(original=True)
 
 
