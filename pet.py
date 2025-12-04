@@ -2,18 +2,11 @@ import torch
 import ltn
 import random
 import matplotlib.pyplot as plt
+import argparse
+import os
+import numpy as np
 
-object_grounding_dim = (5, 4)
 _pred_model_sizes = [4, 16, 1]
-stage_epoch = 2000
-stages = 3 # number of sample by feature size
-
-And  = ltn.Connective(ltn.fuzzy_ops.AndProd())
-Impl = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
-Not  = ltn.Connective(ltn.fuzzy_ops.NotStandard())
-Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
-
-
 def _predicate_model():
     layers = []
     for in_f, out_f in zip(_pred_model_sizes, _pred_model_sizes[1:]):
@@ -36,11 +29,17 @@ def set_global_seed(seed):
 # Groundings
 # ============================================================
 
+GROUNDING_SEED = 0  # any fixed integer
+object_grounding_dim = (5, 4)
 def make_groundings():
-    Normal_Birds = torch.randn(object_grounding_dim)
-    Penguins     = torch.randn(object_grounding_dim)
-    Cows         = torch.randn(object_grounding_dim)
-    Animals = torch.cat([Normal_Birds, Penguins, Cows], dim=0)
+    # Local RNG, independent of torch.manual_seed(...)
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(GROUNDING_SEED)
+
+    Normal_Birds = torch.randn(object_grounding_dim, generator=gen)
+    Penguins     = torch.randn(object_grounding_dim, generator=gen)
+    Cows         = torch.randn(object_grounding_dim, generator=gen)
+    Animals      = torch.cat([Normal_Birds, Penguins, Cows], dim=0)
 
     return {
         "Normal_Birds": Normal_Birds,
@@ -59,10 +58,13 @@ def build_predicates():
     can_fly     = ltn.Predicate(_predicate_model())
     return is_bird, is_penguin, can_fly
 
-
 # ============================================================
 # Build the PET rules (Appendix A)
 # ============================================================
+And  = ltn.Connective(ltn.fuzzy_ops.AndProd())
+Impl = ltn.Connective(ltn.fuzzy_ops.ImpliesReichenbach())
+Not  = ltn.Connective(ltn.fuzzy_ops.NotStandard())
+Forall = ltn.Quantifier(ltn.fuzzy_ops.AggregPMeanError(p=2), quantifier="f")
 
 def build_rules(preds, g):
     """
@@ -107,6 +109,8 @@ def satisfaction(rule_fns):
     sats = [r().value for r in rule_fns]
     return torch.mean(torch.stack(sats))
 
+stage_epoch = 2000
+stages = 3 # number of sample by feature size
 def train_stage(preds, rules, grounding, curriculum=None):
     params = []
     for p in preds:
@@ -183,18 +187,27 @@ def plot_groundings(g1s, g2s, g3s, g4s, title, stage_periods=None):
 # Baseline curriculum
 # ============================================================
 
-def run_baseline():
-    print("\n=== BASELINE ===")
-    g = make_groundings()
-    preds = build_predicates()
-    rules = build_rules(preds, g)
-    g1s, g2s, g3s, g4s = train_stage(preds, rules, g,'baseline')
-    plot_groundings(g1s, g2s, g3s, g4s, title="Baseline")
-    print("Baseline Results:")
-    print(f"is_bird(Normal_Birds) {g1s[-1]:.4f}")
-    print(f"is_bird(Penguins) {g2s[-1]:.4f}")
-    print(f"can_fly(Birds) {g3s[-1]:.4f}")
-    print(f"not(can_fly(Penguins)) {g4s[-1]:.4f}")
+def run_baseline(seeds, out_dir='baseline_results'):
+    os.makedirs(out_dir, exist_ok=True)
+
+    for seed in seeds:
+        # set seed, build models, run training -> returns per-step arrays
+        set_global_seed(seed)
+        preds = build_predicates()
+        g = make_groundings()
+        rules = build_rules(preds, g)
+
+        g1s, g2s, g3s, g4s = train_stage(preds, rules, g)
+
+        path = os.path.join(out_dir, f"baseline_seed_{seed}.npz")
+        # save each run independently
+        np.savez_compressed(path,
+                            seed=seed,
+                            g1s=np.array(g1s),
+                            g2s=np.array(g2s),
+                            g3s=np.array(g3s),
+                            g4s=np.array(g4s))
+        print(f"Saved run {seed} -> {path}")
 
 # ============================================================
 # Random 3-stage curriculum (with recall)
@@ -256,9 +269,21 @@ def run_random(original=False):
 # ============================================================
 
 # TODO: average over multiple seeds
-set_global_seed(42)
 # run_baseline()
-run_random()
+# run_random()
 # run_random(original=True)
 
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    # TODO: handle different curricula
+    parser.add_argument('--curriculum', type=str, default='baseline', help='Curriculum to run')
+    parser.add_argument('--seed', type=int, default=None, help='Single seed to run')
+    parser.add_argument('--out_dir', type=str, default='baseline_results', help='Output directory')
+    args = parser.parse_args()
+
+    if args.seed is None:
+        raise Exception("Seed missing")
+    else:
+        if args.curriculum == 'baseline':
+            run_baseline(seeds=[args.seed], out_dir=args.out_dir)
