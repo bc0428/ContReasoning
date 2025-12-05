@@ -111,15 +111,15 @@ def satisfaction(rule_fns):
 
 stage_epoch = 2000
 stages = 3 # number of sample by feature size
-def train_stage(preds, rules, grounding, curriculum=None):
+def train_stage(preds, rules, grounding, baseline=False, optimizer=None):
     params = []
     for p in preds:
         params += list(p.parameters())
 
-    opt = torch.optim.Adam(params)
+    opt = torch.optim.Adam(params) if optimizer is None else optimizer
 
     g1s, g2s, g3s, g4s = [], [], [], []
-    for _ in range(stage_epoch * stages if curriculum == 'baseline' else stage_epoch):
+    for _ in range(stage_epoch * stages if baseline else stage_epoch):
         g1, g2, g3, g4 = evaluate(preds, grounding)
         g1s.append(g1)
         g2s.append(g2)
@@ -131,7 +131,7 @@ def train_stage(preds, rules, grounding, curriculum=None):
         loss.backward()
         opt.step()
 
-    return g1s, g2s, g3s, g4s
+    return g1s, g2s, g3s, g4s, opt
 # ============================================================
 # Evaluation (matches Table 1 metrics)
 # ============================================================
@@ -197,7 +197,7 @@ def run_baseline(seeds, out_dir='baseline_results'):
         g = make_groundings()
         rules = build_rules(preds, g)
 
-        g1s, g2s, g3s, g4s = train_stage(preds, rules, g)
+        g1s, g2s, g3s, g4s, _ = train_stage(preds, rules, g, baseline=True)
 
         path = os.path.join(out_dir, f"baseline_seed_{seed}.npz")
         # save each run independently
@@ -213,73 +213,79 @@ def run_baseline(seeds, out_dir='baseline_results'):
 # Random 3-stage curriculum (with recall)
 # ============================================================
 
-def run_random(original=False):
-    g = make_groundings()
-    preds = build_predicates()
-    all_rules = build_rules(preds, g)
-    title  = "Random_Original" if original else "Random"
+def run_random(seeds, out_dir=None,  original=False):
+    os.makedirs(out_dir, exist_ok=True)
 
-    if original:  # following the specific split from the paper: stage 1:(3,4,6,2) 2:(5,1) 3:(7,8)
-        print("\n=== RANDOM (ORIGINAL) CURRICULUM ===")
-        stages = [[all_rules[i] for i in idxs] for idxs in [[1, 2, 3, 5], [0, 4], [6, 7]]]
-    else:
-        print("\n=== RANDOM CURRICULUM ===")
-        sizes = [4, 2, 2]
-        indices = list(range(len(all_rules)))
-        random.shuffle(indices)
-        it = iter(indices)
-        stages = [[all_rules[i] for i in (next(it) for _ in range(s))] for s in sizes]
+    for seed in seeds:
+        set_global_seed(seed)
+        g = make_groundings()
+        preds = build_predicates()
+        all_rules = build_rules(preds, g)
 
-    recall = []
-    stage_all_results = []
-    stage_final_results = []
+        if original:  # following the specific split from the paper: stage 1:(3,4,6,2) 2:(5,1) 3:(7,8)
+            print("\n=== RANDOM (ORIGINAL) CURRICULUM ===")
+            stages = [[all_rules[i] for i in idxs] for idxs in [[1, 2, 3, 5], [0, 4], [6, 7]]]
+            curriculum = "random_original"
+        else:
+            print("\n=== RANDOM CURRICULUM ===")
+            sizes = [4, 2, 2]
+            indices = list(range(len(all_rules)))
+            random.shuffle(indices)
+            it = iter(indices)
+            stages = [[all_rules[i] for i in (next(it) for _ in range(s))] for s in sizes]
+            curriculum = "random"
 
-    for stage in stages:
-        stage_rules = stage + recall
-        g1s, g2s, g3s, g4s = train_stage(preds, stage_rules, g)
+        recall = []
+        full_g1s, full_g2s, full_g3s, full_g4s = [], [], [], []
+        optimizer = None
+        for stage in stages:
+            stage_rules = stage + recall
+            g1s, g2s, g3s, g4s, optimizer = train_stage(preds, stage_rules, g, optimizer=optimizer)
+            full_g1s.extend(g1s)
+            full_g2s.extend(g2s)
+            full_g3s.extend(g3s)
+            full_g4s.extend(g4s)
 
-        # recall, one rule per stage added to memory
-        recalled_rule = random.choice(stage)
-        recall.append(recalled_rule)
+            # recall, one rule per stage added to memory
+            recalled_rule = random.choice(stage)
+            recall.append(recalled_rule)
 
-        stage_all_results.append((g1s, g2s, g3s, g4s))
-        stage_final_results.append((float(g1s[-1]), float(g2s[-1]), float(g3s[-1]), float(g4s[-1])))
+            # save per-seed identical format to baseline
+        path = os.path.join(out_dir, curriculum + f"_seed_{seed}.npz")
+        np.savez_compressed(path,
+                            seed=seed,
+                            g1s=np.array(full_g1s),
+                            g2s=np.array(full_g2s),
+                            g3s=np.array(full_g3s),
+                            g4s=np.array(full_g4s))
+        print(f"Saved run {seed} -> {path}")
 
-    # print final results per stage
-    print("Per-stage final results:")
-    for idx, (r1, r2, r3, r4) in enumerate(stage_final_results):
-        print(f" Stage {idx+1}: is_bird(Normal_Birds) {r1:.4f}, is_bird(Penguins) {r2:.4f}, can_fly(Birds) {r3:.4f}, not(can_fly(Penguins)) {r4:.4f}")
 
-    # merge all data points for a complete plot and demarcate stage periods
-    full_g1s, full_g2s, full_g3s, full_g4s = [], [], [], []
-    stage_periods = []
-    for (g1s, g2s, g3s, g4s) in stage_all_results:
-        full_g1s.extend(g1s)
-        full_g2s.extend(g2s)
-        full_g3s.extend(g3s)
-        full_g4s.extend(g4s)
-        stage_periods.append(len(g1s))
+        # print final results per stage
+        # print("Per-stage final results:")
+        # for idx, (r1, r2, r3, r4) in enumerate(stage_final_results):
+        #     print(f" Stage {idx+1}: is_bird(Normal_Birds) {r1:.4f}, is_bird(Penguins) {r2:.4f}, can_fly(Birds) {r3:.4f}, not(can_fly(Penguins)) {r4:.4f}")
+        #
+        # # merge all data points for a complete plot and demarcate stage periods
+        # full_g1s, full_g2s, full_g3s, full_g4s = [], [], [], []
+        # stage_periods = []
+        # for (g1s, g2s, g3s, g4s) in stage_all_results:
+        #     full_g1s.extend(g1s)
+        #     full_g2s.extend(g2s)
+        #     full_g3s.extend(g3s)
+        #     full_g4s.extend(g4s)
+        #     stage_periods.append(len(g1s))
+        #
+        # plot_groundings(full_g1s, full_g2s, full_g3s, full_g4s, title=title, stage_periods=stage_periods)
 
-    plot_groundings(full_g1s, full_g2s, full_g3s, full_g4s, title=title, stage_periods=stage_periods)
-
-    return evaluate(preds, g)
 
 # ============================================================
-# Run both experiments
-# ============================================================
-
-# TODO: average over multiple seeds
-# run_baseline()
-# run_random()
-# run_random(original=True)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    # TODO: handle different curricula
-    parser.add_argument('--curriculum', type=str, default='baseline', help='Curriculum to run')
-    parser.add_argument('--seed', type=int, default=None, help='Single seed to run')
-    parser.add_argument('--out_dir', type=str, default='baseline_results', help='Output directory')
+    parser.add_argument('curriculum', type=str, default='baseline', help='Curriculum to run')
+    parser.add_argument('seed', type=int, default=None, help='Single seed to run')
+    parser.add_argument('out_dir', type=str, default='baseline_results', help='Output directory')
     args = parser.parse_args()
 
     if args.seed is None:
@@ -287,3 +293,7 @@ if __name__ == '__main__':
     else:
         if args.curriculum == 'baseline':
             run_baseline(seeds=[args.seed], out_dir=args.out_dir)
+        elif args.curriculum == 'random_original':
+            run_random(seeds = [args.seed], out_dir=args.out_dir, original=True)
+        elif args.curriculum == 'random':
+            run_random(seeds = [args.seed], out_dir=args.out_dir)

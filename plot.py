@@ -8,9 +8,11 @@ import matplotlib.pyplot as plt
 # Configuration (no arguments needed)
 # ============================================================
 
-RESULT_DIR = "baseline_results"
-FILE_PATTERN = "baseline_seed_*.npz"
-OUTPUT_PLOT = "baseline.png"
+curriculum = "random"
+
+RESULT_DIR = curriculum + "_results"
+FILE_PATTERN = curriculum + "_seed_*.npz"
+OUTPUT_PLOT = curriculum + ".png"
 
 
 # ============================================================
@@ -77,7 +79,7 @@ def plot_training(t, means, sds, labels):
 
     plt.xlabel("Training Step")
     plt.ylabel("Grounding")
-    plt.title("Baseline Curriculum — Mean ± 1 SD")
+    plt.title(curriculum + " curriculum — Mean ± 1 SD")
     plt.legend()
     plt.tight_layout()
     plt.savefig(OUTPUT_PLOT)
