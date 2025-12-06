@@ -1,0 +1,11 @@
+two sets of experiments
+1. atom then implication
+2. opposite
+
+both with new optimizer
+
+compare
+1. within to validate if learning atoms first is better
+2. with baseline to see if baseline is actually worse
+
+random sampling for recall, but the learning sequence itself has no randomness, just deterministic two stage learning

@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 # Configuration (no arguments needed)
 # ============================================================
 
-curriculum = "random"
+curriculum = "random_original"
 
 RESULT_DIR = curriculum + "_results"
 FILE_PATTERN = curriculum + "_seed_*.npz"

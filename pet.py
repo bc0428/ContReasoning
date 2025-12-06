@@ -80,21 +80,21 @@ def build_rules(preds, g):
     xNon_P = ltn.Variable("x", torch.cat([g["Normal_Birds"], g["Cows"]], dim=0))
 
     return [
-        # 1 normal birds are birds
+        # 0 normal birds are birds
         lambda: Forall(xNB, is_bird(xNB)),
-        # 2 cows are not birds
+        # 1 cows are not birds
         lambda: Forall(xC, Not(is_bird(xC))),
-        # 3 birds can fly
+        # 2 birds can fly
         lambda: Forall(xA, Impl(is_bird(xA), can_fly(xA))),
-        # 4 non-birds cannot fly
+        # 3 non-birds cannot fly
         lambda: Forall(xA, Impl(Not(is_bird(xA)), Not(can_fly(xA)))),
-        # 5 penguins are penguins
+        # 4 penguins are penguins
         lambda: Forall(xP, is_penguin(xP)),
-        # 6 non-penguins are not penguins
+        # 5 non-penguins are not penguins
         lambda: Forall(xNon_P, Not(is_penguin(xNon_P))),
-        # 7 penguins are birds
+        # 6 penguins are birds
         lambda: Forall(xA, Impl(is_penguin(xA), is_bird(xA))),
-        # 8 penguins do not fly
+        # 7 penguins do not fly
         lambda: Forall(xA, Impl(is_penguin(xA), Not(can_fly(xA))))
     ]
 
@@ -237,8 +237,9 @@ def run_random(seeds, out_dir=None,  original=False):
 
         recall = []
         full_g1s, full_g2s, full_g3s, full_g4s = [], [], [], []
-        optimizer = None
+
         for stage in stages:
+            optimizer = None
             stage_rules = stage + recall
             g1s, g2s, g3s, g4s, optimizer = train_stage(preds, stage_rules, g, optimizer=optimizer)
             full_g1s.extend(g1s)

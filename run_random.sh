@@ -17,7 +17,7 @@ for SEED in {0..9999}; do
   echo "Launching seed $SEED"
 
   python pet.py \
-      random \
+      random_original \
       "$SEED" \
       "$OUT_DIR" \
       > /dev/null 2>&1 &
